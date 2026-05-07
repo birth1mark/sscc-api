@@ -6,7 +6,7 @@
 
 🔗 **Live app**: [birth1mark.github.io/sscc-check](https://birth1mark.github.io/sscc-check/)
 
-🔗 **Guide**: [birth1mark.github.io/sscc-check/guide.html](https://birth1mark.github.io/sscc-check/sscc-api-guide.html)
+🔗 **Guide**: [birth1mark.github.io/sscc-check/sscc-api-guide.html](https://birth1mark.github.io/sscc-check/sscc-api-guide.html)
 
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
