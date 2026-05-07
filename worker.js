@@ -191,6 +191,57 @@ function error(message, status = 400) {
     return json({ error: message }, status);
 }
 
+// ─── Rate Limiter ────────────────────────────────────────────────────────────
+// 500 requests per IP per hour using Cloudflare KV
+// Optimised to minimise KV writes (free tier: 1k writes/day)
+//
+// Strategy:
+//   - 1 read per request (cheap — 100k/day free)
+//   - Write only when: first request in window, or limit is reached
+//   - This keeps writes to ~1 per IP per hour under normal use
+//
+// KV binding: RATE_LIMIT (set in Worker settings)
+
+const RATE_LIMIT_MAX    = 500;   // max requests per window
+const RATE_LIMIT_WINDOW = 3600;  // 1 hour in seconds
+
+async function checkRateLimit(request, env) {
+    if (!env.RATE_LIMIT) return null; // KV not bound — skip silently
+
+    const ip      = request.headers.get('CF-Connecting-IP') || 'unknown';
+    const window  = Math.floor(Date.now() / (RATE_LIMIT_WINDOW * 1000));
+    const key     = `rl:${ip}:${window}`;
+
+    const raw     = await env.RATE_LIMIT.get(key);
+    const current = raw ? parseInt(raw) : 0;
+
+    // Over limit — block (no write needed, already written when limit was hit)
+    if (current >= RATE_LIMIT_MAX) {
+        return new Response(JSON.stringify({
+            error: `Rate limit exceeded: max ${RATE_LIMIT_MAX} requests per hour per IP. Try again later.`
+        }), {
+            status: 429,
+            headers: {
+                'Content-Type': 'application/json',
+                'Retry-After':           String(RATE_LIMIT_WINDOW),
+                'X-RateLimit-Limit':     String(RATE_LIMIT_MAX),
+                'X-RateLimit-Remaining': '0',
+                ...CORS,
+            },
+        });
+    }
+
+    const next = current + 1;
+
+    // Write only on first request (raw === null) or when hitting the limit
+    // All other requests: read-only — saves ~98% of writes
+    if (raw === null || next >= RATE_LIMIT_MAX) {
+        await env.RATE_LIMIT.put(key, String(next), { expirationTtl: RATE_LIMIT_WINDOW });
+    }
+
+    return null; // allowed
+}
+
 // ─── Endpoints ────────────────────────────────────────────────────────────────
 
 function handleValidate(url) {
@@ -494,12 +545,16 @@ async function handleExtract(request) {
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 export default {
-    async fetch(request) {
+    async fetch(request, env) {
         const url = new URL(request.url);
 
         if (request.method === 'OPTIONS') {
             return new Response(null, { status: 204, headers: CORS });
         }
+
+        // Rate limiting
+        const rateLimited = await checkRateLimit(request, env);
+        if (rateLimited) return rateLimited;
 
         if (request.method !== 'GET') {
             return error('Method not allowed. Use GET.', 405);
@@ -525,7 +580,7 @@ export default {
                 return json({
                     name:    'SSCC Pro Vision API',
                     version: '1.0.0',
-                    docs:    'https://birth1mark.github.io/sscc-check/sscc-api-guide.html',
+                    docs:    'https://birth1mark.github.io/sscc-check/guide.html',
                     endpoints: {
                         validate: '/validate?sscc=356012345600000016',
                         generate: '/generate?body=35601234560000001',
